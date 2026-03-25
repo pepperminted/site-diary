@@ -8,13 +8,13 @@ export default function Entry({ entry }) {
   const createdAt = new Date(entry.created_at).toLocaleString()
 
   useEffect(() => {
-    if (entry.photo_path) {
+    if (entry.photo_urls) {
       loadPhotoUrl()
     }
-  }, [entry.photo_path])
+  }, [entry.photo_urls])
 
   const loadPhotoUrl = async () => {
-    const { data } = supabase.storage.from("entry-photos").getPublicUrl(entry.photo_path)
+    const { data } = supabase.storage.from("entry-photos").getPublicUrl(entry.photo_urls)
     if (data) setPhotoUrl(data.publicUrl)
   }
 

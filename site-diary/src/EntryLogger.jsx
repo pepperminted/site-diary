@@ -71,7 +71,7 @@ export default function EntryLogger({ user, projects }) {
         project_id: selectedProjectId,
         user_id: user.id,
         text,
-        photo_path: photoPath,
+        photo_urls: photoPath,
         type: "text",
       },
     ])
