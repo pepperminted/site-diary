@@ -1,0 +1,22 @@
+{
+  "name": "site-diary",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev ",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.100.0",
+    "next": "^16.2.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwindcss": "^4.2.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.2.2",
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.4.0"
+  }
+}
