@@ -5,32 +5,112 @@ import { supabase } from "./supabaseClient"
 import EntryList from "./EntryList"
 
 export default function EntryLogger({ user, projects }) {
-  const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id || null)
+  const toKey = (value) => (value === null || value === undefined ? "" : String(value).trim())
+
+  const uniqueNonEmpty = (values) => Array.from(new Set(values.map(toKey).filter(Boolean)))
+
+  const getProjectIdentifiers = (project) =>
+    uniqueNonEmpty([
+      project?.id,
+      project?.project_id,
+      project?.projectId,
+      project?.uuid,
+      project?.name,
+      project?.project_name,
+    ])
+
+  const getEntryIdentifiers = (entry) =>
+    uniqueNonEmpty([
+      entry?.project_id,
+      entry?.projectId,
+      entry?.project_uuid,
+      entry?.project_name,
+      entry?.project,
+      entry?.project?.id,
+      entry?.project?.project_id,
+      entry?.project?.projectId,
+      entry?.project?.name,
+    ])
+
+  const getProjectKey = (project) =>
+    project?.id ?? project?.project_id ?? project?.projectId ?? project?.uuid ?? project?.name ?? null
+
+  const entryBelongsToProject = (entry, project) => {
+    const entryIds = getEntryIdentifiers(entry)
+    const projectIds = getProjectIdentifiers(project)
+    return entryIds.some((id) => projectIds.includes(id))
+  }
+
+  const [selectedProjectId, setSelectedProjectId] = useState(null)
   const [text, setText] = useState("")
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(false)
+  const [fetchError, setFetchError] = useState("")
+  const [debugSummary, setDebugSummary] = useState("")
   const [isRecording, setIsRecording] = useState(false)
   const [mediaRecorder, setMediaRecorder] = useState(null)
   const [photoFile, setPhotoFile] = useState(null)
   const [photoPreview, setPhotoPreview] = useState(null)
 
-  const selectedProject = projects.find((p) => p.id === selectedProjectId)
+  const selectedProject = projects.find((p) => String(getProjectKey(p)) === String(selectedProjectId))
+
+  // Ensure we always have a valid selected project after projects load.
+  useEffect(() => {
+    if (projects.length === 0) {
+      setSelectedProjectId(null)
+      return
+    }
+
+    const stillExists = projects.some((p) => String(getProjectKey(p)) === String(selectedProjectId))
+    if (!selectedProjectId || !stillExists) {
+      const firstProjectKey = getProjectKey(projects[0])
+      setSelectedProjectId(firstProjectKey ? String(firstProjectKey) : null)
+    }
+  }, [projects, selectedProjectId])
 
   // Fetch entries for selected project
   useEffect(() => {
-    fetchEntries()
+    fetchEntries(selectedProjectId)
   }, [selectedProjectId])
 
-  const fetchEntries = async () => {
-    if (!selectedProjectId) return
+  const fetchEntries = async (projectId) => {
+    if (!projectId) {
+      setFetchError("")
+      setDebugSummary("No project selected")
+      setEntries([])
+      return
+    }
+
     setLoading(true)
+    setFetchError("")
     const { data, error } = await supabase
       .from("entries")
       .select("*")
-      .eq("project_id", selectedProjectId)
       .order("created_at", { ascending: false })
 
-    if (!error) setEntries(data || [])
+    if (error) {
+      console.error("Failed to fetch entries:", error.message)
+      setFetchError(error.message)
+      setDebugSummary(`Query failed for project key: ${projectId}`)
+      setEntries([])
+    } else {
+      const selectedProjectForFilter = projects.find((p) => String(getProjectKey(p)) === String(projectId))
+      const allEntries = data || []
+      const filteredEntries = selectedProjectForFilter
+        ? allEntries.filter((entry) => entryBelongsToProject(entry, selectedProjectForFilter))
+        : []
+
+      if (allEntries.length === 0) {
+        setDebugSummary(
+          `Loaded 0 entries for user ${user.id}. If entries exist in Supabase table, check RLS SELECT policy on entries.`
+        )
+      } else {
+        setDebugSummary(
+          `Loaded ${allEntries.length} entries, matched ${filteredEntries.length} for project key ${projectId}`
+        )
+      }
+      setEntries(filteredEntries)
+    }
     setLoading(false)
   }
 
@@ -66,9 +146,12 @@ export default function EntryLogger({ user, projects }) {
       photoPath = await uploadPhoto(photoFile)
     }
 
+    const selectedProjectForInsert = projects.find((p) => String(getProjectKey(p)) === String(selectedProjectId))
+    const projectIdForInsert = getProjectKey(selectedProjectForInsert) ?? selectedProjectId
+
     const { error } = await supabase.from("entries").insert([
       {
-        project_id: selectedProjectId,
+        project_id: projectIdForInsert,
         user_id: user.id,
         text,
         photo_urls: photoPath,
@@ -82,7 +165,7 @@ export default function EntryLogger({ user, projects }) {
       setText("")
       setPhotoFile(null)
       setPhotoPreview(null)
-      fetchEntries()
+      fetchEntries(selectedProjectId)
     }
     setLoading(false)
   }
@@ -129,7 +212,7 @@ export default function EntryLogger({ user, projects }) {
             onChange={(e) => setSelectedProjectId(e.target.value)}
           >
             {projects.map((p) => (
-              <option key={p.id} value={p.id}>
+              <option key={String(getProjectKey(p) || p.name)} value={String(getProjectKey(p) || "")}>
                 {p.name} ({p.address})
               </option>
             ))}
@@ -215,6 +298,8 @@ export default function EntryLogger({ user, projects }) {
       )}
 
       <h3>Entry History</h3>
+      {fetchError && <p style={{ color: "#b00020" }}>Failed to load entries: {fetchError}</p>}
+      {!fetchError && <p style={{ color: "#666", fontSize: "12px" }}>{debugSummary}</p>}
       <EntryList entries={entries} loading={loading} />
     </div>
   )
