@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react"
 import { supabase } from "./supabaseClient"
 
-export default function Entry({ entry }) {
+export default function Entry({ entry, onDeleteEntry, deleting = false }) {
   const [photoUrl, setPhotoUrl] = useState(null)
   const [audioUrl, setAudioUrl] = useState(null)
   const [lightboxOpen, setLightboxOpen] = useState(false)
@@ -89,6 +89,27 @@ export default function Entry({ entry }) {
                 <audio controls src={audioUrl} style={{ height: "32px", flex: 1 }} />
               </div>
             )}
+
+            <div style={{ marginTop: "10px" }}>
+              <button
+                type="button"
+                onClick={() => onDeleteEntry?.(entry)}
+                disabled={deleting}
+                style={{
+                  padding: "6px 10px",
+                  border: "1px solid #dc3545",
+                  color: "#dc3545",
+                  backgroundColor: "white",
+                  borderRadius: "4px",
+                  cursor: deleting ? "not-allowed" : "pointer",
+                  fontSize: "12px",
+                  fontWeight: "bold",
+                  opacity: deleting ? 0.6 : 1,
+                }}
+              >
+                {deleting ? "Deleting..." : "Delete Log"}
+              </button>
+            </div>
           </div>
 
           {/* Right: photo thumbnail */}

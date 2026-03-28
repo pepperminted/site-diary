@@ -14,9 +14,15 @@ export default function ProjectForm({ user, refreshProjects }) {
   const handleSubmit = async (e) => {
     e.preventDefault()
 
+    const projectName = name.trim()
+    if (!projectName) {
+      alert("Project name is required")
+      return
+    }
+
     const { error } = await supabase.from("projects").insert([
       {
-        name,
+        name: projectName,
         address,
         phase,
         lat: lat ? parseFloat(lat) : null,
@@ -57,6 +63,7 @@ export default function ProjectForm({ user, refreshProjects }) {
         placeholder="Project Name"
         value={name}
         onChange={(e) => setName(e.target.value)}
+        required
       />
 
       <input

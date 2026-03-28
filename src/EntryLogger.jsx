@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react"
 import { supabase } from "./supabaseClient"
 import EntryList from "./EntryList"
 
-export default function EntryLogger({ user, projects }) {
+export default function EntryLogger({ user, projects, initialProjectId }) {
   const toKey = (value) => (value === null || value === undefined ? "" : String(value).trim())
 
   const uniqueNonEmpty = (values) => Array.from(new Set(values.map(toKey).filter(Boolean)))
@@ -46,6 +46,7 @@ export default function EntryLogger({ user, projects }) {
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(false)
   const [fetchError, setFetchError] = useState("")
+  const [deletingEntryId, setDeletingEntryId] = useState(null)
   const [isRecording, setIsRecording] = useState(false)
   const [mediaRecorder, setMediaRecorder] = useState(null)
   const [audioChunksRef] = useState({ current: [] })
@@ -55,6 +56,18 @@ export default function EntryLogger({ user, projects }) {
   const [photoPreview, setPhotoPreview] = useState(null)
 
   const selectedProject = projects.find((p) => String(getProjectKey(p)) === String(selectedProjectId))
+
+  useEffect(() => {
+    if (!initialProjectId || projects.length === 0) return
+
+    const requestedProjectExists = projects.some(
+      (p) => String(getProjectKey(p)) === String(initialProjectId)
+    )
+
+    if (requestedProjectExists) {
+      setSelectedProjectId(String(initialProjectId))
+    }
+  }, [initialProjectId, projects])
 
   // Ensure we always have a valid selected project after projects load.
   useEffect(() => {
@@ -225,6 +238,36 @@ export default function EntryLogger({ user, projects }) {
     }
   }
 
+  const handleDeleteEntry = async (entry) => {
+    const confirmed = window.confirm("Are you sure you want to delete this log entry?")
+    if (!confirmed) return
+
+    if (!entry?.id) {
+      alert("Could not determine which log entry to delete.")
+      return
+    }
+
+    setDeletingEntryId(entry.id)
+
+    if (entry.photo_urls) {
+      await supabase.storage.from("entry-photos").remove([entry.photo_urls])
+    }
+
+    if (entry.audio_url) {
+      await supabase.storage.from("entry-audio").remove([entry.audio_url])
+    }
+
+    const { error } = await supabase.from("entries").delete().eq("id", entry.id)
+
+    if (error) {
+      alert("Failed to delete log entry: " + error.message)
+    } else {
+      setEntries((previousEntries) => previousEntries.filter((item) => item.id !== entry.id))
+    }
+
+    setDeletingEntryId(null)
+  }
+
   return (
     <div style={{ padding: "20px" }}>
       <h2>Project Log</h2>
@@ -344,7 +387,12 @@ export default function EntryLogger({ user, projects }) {
 
       <h3>Entry History</h3>
       {fetchError && <p style={{ color: "#b00020" }}>Failed to load entries: {fetchError}</p>}
-      <EntryList entries={entries} loading={loading} />
+      <EntryList
+        entries={entries}
+        loading={loading}
+        deletingEntryId={deletingEntryId}
+        onDeleteEntry={handleDeleteEntry}
+      />
     </div>
   )
 }
