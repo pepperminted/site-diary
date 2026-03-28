@@ -4,7 +4,7 @@ import React, { useState, useEffect } from "react"
 import { supabase } from "./supabaseClient"
 import EntryList from "./EntryList"
 
-export default function EntryLogger({ user, projects, initialProjectId }) {
+export default function EntryLogger({ user, projects, initialProjectId, refreshProjects }) {
   const toKey = (value) => (value === null || value === undefined ? "" : String(value).trim())
 
   const uniqueNonEmpty = (values) => Array.from(new Set(values.map(toKey).filter(Boolean)))
@@ -54,8 +54,24 @@ export default function EntryLogger({ user, projects, initialProjectId }) {
   const [audioName, setAudioName] = useState("")     // display label
   const [photoFile, setPhotoFile] = useState(null)
   const [photoPreview, setPhotoPreview] = useState(null)
+  const [isEditingProjectDetails, setIsEditingProjectDetails] = useState(false)
+  const [projectNameInput, setProjectNameInput] = useState("")
+  const [projectClientInput, setProjectClientInput] = useState("")
+  const [projectContactInput, setProjectContactInput] = useState("")
+  const [projectPhaseInput, setProjectPhaseInput] = useState("")
+  const [projectAddressInput, setProjectAddressInput] = useState("")
 
   const selectedProject = projects.find((p) => String(getProjectKey(p)) === String(selectedProjectId))
+
+  useEffect(() => {
+    if (!selectedProject) return
+
+    setProjectNameInput(selectedProject.name || "")
+    setProjectClientInput(selectedProject.client || "")
+    setProjectContactInput(selectedProject.contact || "")
+    setProjectPhaseInput(selectedProject.phase || "")
+    setProjectAddressInput(selectedProject.address || "")
+  }, [selectedProject])
 
   useEffect(() => {
     if (!initialProjectId || projects.length === 0) return
@@ -73,6 +89,16 @@ export default function EntryLogger({ user, projects, initialProjectId }) {
   useEffect(() => {
     if (projects.length === 0) {
       setSelectedProjectId(null)
+      return
+    }
+
+    const requestedProjectExists = initialProjectId && projects.some(
+      (p) => String(getProjectKey(p)) === String(initialProjectId)
+    )
+
+    // If a specific project was requested from dashboard, wait for that
+    // selection to be applied instead of immediately falling back.
+    if (requestedProjectExists && String(selectedProjectId) !== String(initialProjectId)) {
       return
     }
 
@@ -158,6 +184,7 @@ export default function EntryLogger({ user, projects, initialProjectId }) {
     const selectedProjectForInsert = projects.find((p) => String(getProjectKey(p)) === String(selectedProjectId))
     const projectIdForInsert = getProjectKey(selectedProjectForInsert) ?? selectedProjectId
     const entryType = audioFile ? "voice" : photoFile ? "photo" : "text"
+    const clientCreatedAt = new Date().toISOString()
 
     const { error } = await supabase.from("entries").insert([
       {
@@ -167,6 +194,7 @@ export default function EntryLogger({ user, projects, initialProjectId }) {
         photo_urls: photoPath,
         audio_url: audioPath,
         type: entryType,
+        created_at: clientCreatedAt,
       },
     ])
 
@@ -238,6 +266,57 @@ export default function EntryLogger({ user, projects, initialProjectId }) {
     }
   }
 
+  const getProjectUpdateFilter = (project) => {
+    if (project?.id) return ["id", project.id]
+    if (project?.project_id) return ["project_id", project.project_id]
+    if (project?.uuid) return ["uuid", project.uuid]
+    if (project?.name) return ["name", project.name]
+    return null
+  }
+
+  const handleUpdateProjectDetails = async () => {
+    if (!selectedProject) return
+
+    const nextProjectName = projectNameInput.trim()
+    if (!nextProjectName) {
+      alert("Project name is required")
+      return
+    }
+
+    const updateFilter = getProjectUpdateFilter(selectedProject)
+    if (!updateFilter) {
+      alert("Could not determine which project to update.")
+      return
+    }
+
+    const updates = {
+      name: nextProjectName,
+      client: projectClientInput.trim() || null,
+      contact: projectContactInput.trim() || null,
+      phase: projectPhaseInput.trim() || null,
+      address: projectAddressInput.trim() || null,
+    }
+
+    const [field, value] = updateFilter
+    const { error } = await supabase.from("projects").update(updates).eq(field, value)
+
+    if (error) {
+      alert("Failed to update project details: " + error.message)
+      return
+    }
+
+    if (typeof refreshProjects === "function") {
+      await refreshProjects()
+    }
+
+    const updatedProjectKey = selectedProject?.id ?? selectedProject?.project_id ?? selectedProject?.uuid ?? updates.name
+    if (updatedProjectKey) {
+      setSelectedProjectId(String(updatedProjectKey))
+    }
+
+    setIsEditingProjectDetails(false)
+  }
+
   const handleDeleteEntry = async (entry) => {
     const confirmed = window.confirm("Are you sure you want to delete this log entry?")
     if (!confirmed) return
@@ -290,23 +369,116 @@ export default function EntryLogger({ user, projects, initialProjectId }) {
 
       {selectedProject && (
         <div style={{ marginBottom: "30px", border: "1px solid #ddd", padding: "15px", borderRadius: "8px" }}>
-          <h3>{selectedProject.name}</h3>
-          <p>{selectedProject.address}</p>
-          <p><strong>Phase:</strong> {selectedProject.phase}</p>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
+            <h3 style={{ margin: 0 }}>Project Details</h3>
+            <button
+              type="button"
+              onClick={() => setIsEditingProjectDetails((value) => !value)}
+              style={{
+                padding: "6px 10px",
+                border: "1px solid #0d6efd",
+                color: "#0d6efd",
+                backgroundColor: "white",
+                borderRadius: "4px",
+                cursor: "pointer",
+                fontSize: "12px",
+                fontWeight: "bold",
+              }}
+            >
+              {isEditingProjectDetails ? "Cancel Edit" : "Edit Project Details"}
+            </button>
+          </div>
+
+          <p><strong>Project:</strong> {selectedProject.name || "-"}</p>
+          <p><strong>Client:</strong> {selectedProject.client || "-"}</p>
+          <p><strong>Contact:</strong> {selectedProject.contact || "-"}</p>
+          <p><strong>Phase:</strong> {selectedProject.phase || "-"}</p>
+          <p><strong>Address:</strong> {selectedProject.address || "-"}</p>
+
+          {isEditingProjectDetails && (
+            <div style={{ marginBottom: "14px", border: "1px solid #e5e7eb", borderRadius: "6px", padding: "10px" }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
+                <input
+                  placeholder="Project Name"
+                  value={projectNameInput}
+                  onChange={(e) => setProjectNameInput(e.target.value)}
+                  style={{ flex: "1 1 180px", minWidth: "150px" }}
+                />
+                <input
+                  placeholder="Client"
+                  value={projectClientInput}
+                  onChange={(e) => setProjectClientInput(e.target.value)}
+                  style={{ flex: "1 1 180px", minWidth: "150px" }}
+                />
+                <input
+                  placeholder="Contact"
+                  value={projectContactInput}
+                  onChange={(e) => setProjectContactInput(e.target.value)}
+                  style={{ flex: "1 1 180px", minWidth: "150px" }}
+                />
+                <input
+                  placeholder="Phase"
+                  value={projectPhaseInput}
+                  onChange={(e) => setProjectPhaseInput(e.target.value)}
+                  style={{ flex: "1 1 160px", minWidth: "130px" }}
+                />
+                <input
+                  placeholder="Address"
+                  value={projectAddressInput}
+                  onChange={(e) => setProjectAddressInput(e.target.value)}
+                  style={{ flex: "1 1 260px", minWidth: "200px" }}
+                />
+                <button
+                  type="button"
+                  onClick={handleUpdateProjectDetails}
+                  style={{
+                    padding: "8px 14px",
+                    border: "none",
+                    borderRadius: "4px",
+                    backgroundColor: "#198754",
+                    color: "white",
+                    cursor: "pointer",
+                    fontWeight: "bold",
+                  }}
+                >
+                  Save Project Details
+                </button>
+              </div>
+            </div>
+          )}
 
           <form onSubmit={handleSubmit}>
-            <textarea
-              placeholder="What's happening on site today?"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              style={{
-                width: "100%",
-                minHeight: "150px",
-                padding: "10px",
-                marginBottom: "10px",
-                fontSize: "16px",
-              }}
-            />
+            <div style={{ marginBottom: "10px", display: "flex", gap: "10px", alignItems: "stretch", flexWrap: "wrap" }}>
+              <textarea
+                placeholder="What's happening on site today?"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                style={{
+                  flex: 1,
+                  minWidth: "260px",
+                  minHeight: "150px",
+                  padding: "10px",
+                  fontSize: "16px",
+                }}
+              />
+
+              <button
+                type="submit"
+                disabled={loading}
+                style={{
+                  padding: "8px 20px",
+                  minWidth: "110px",
+                  backgroundColor: "#ffc107",
+                  color: "black",
+                  borderRadius: "4px",
+                  border: "none",
+                  cursor: "pointer",
+                  fontWeight: "bold",
+                }}
+              >
+                {loading ? "Entering..." : "Enter"}
+              </button>
+            </div>
 
             <div style={{ marginBottom: "10px", display: "flex", gap: "10px" }}>
               <label style={{ cursor: "pointer", padding: "8px 16px", backgroundColor: "#007bff", color: "white", borderRadius: "4px" }}>
@@ -333,22 +505,6 @@ export default function EntryLogger({ user, projects, initialProjectId }) {
                 🔊 Upload Audio
                 <input type="file" accept="audio/*" onChange={handleAudioFileChange} style={{ display: "none" }} />
               </label>
-
-              <button
-                type="submit"
-                disabled={loading}
-                style={{
-                  padding: "8px 16px",
-                  backgroundColor: "#ffc107",
-                  color: "black",
-                  borderRadius: "4px",
-                  border: "none",
-                  cursor: "pointer",
-                  fontWeight: "bold",
-                }}
-              >
-                {loading ? "Saving..." : "Log Entry"}
-              </button>
             </div>
 
             {photoPreview && (

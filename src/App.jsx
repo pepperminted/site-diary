@@ -248,6 +248,7 @@ export default function App() {
           user={session.user}
           projects={projects}
           initialProjectId={selectedProjectForLog}
+          refreshProjects={fetchProjects}
         />
       )}
 
