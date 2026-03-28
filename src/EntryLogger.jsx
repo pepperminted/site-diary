@@ -46,9 +46,11 @@ export default function EntryLogger({ user, projects }) {
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(false)
   const [fetchError, setFetchError] = useState("")
-  const [debugSummary, setDebugSummary] = useState("")
   const [isRecording, setIsRecording] = useState(false)
   const [mediaRecorder, setMediaRecorder] = useState(null)
+  const [audioChunksRef] = useState({ current: [] })
+  const [audioFile, setAudioFile] = useState(null)   // recorded blob or picked file
+  const [audioName, setAudioName] = useState("")     // display label
   const [photoFile, setPhotoFile] = useState(null)
   const [photoPreview, setPhotoPreview] = useState(null)
 
@@ -76,7 +78,6 @@ export default function EntryLogger({ user, projects }) {
   const fetchEntries = async (projectId) => {
     if (!projectId) {
       setFetchError("")
-      setDebugSummary("No project selected")
       setEntries([])
       return
     }
@@ -91,7 +92,6 @@ export default function EntryLogger({ user, projects }) {
     if (error) {
       console.error("Failed to fetch entries:", error.message)
       setFetchError(error.message)
-      setDebugSummary(`Query failed for project key: ${projectId}`)
       setEntries([])
     } else {
       const selectedProjectForFilter = projects.find((p) => String(getProjectKey(p)) === String(projectId))
@@ -99,16 +99,6 @@ export default function EntryLogger({ user, projects }) {
       const filteredEntries = selectedProjectForFilter
         ? allEntries.filter((entry) => entryBelongsToProject(entry, selectedProjectForFilter))
         : []
-
-      if (allEntries.length === 0) {
-        setDebugSummary(
-          `Loaded 0 entries for user ${user.id}. If entries exist in Supabase table, check RLS SELECT policy on entries.`
-        )
-      } else {
-        setDebugSummary(
-          `Loaded ${allEntries.length} entries, matched ${filteredEntries.length} for project key ${projectId}`
-        )
-      }
       setEntries(filteredEntries)
     }
     setLoading(false)
@@ -138,24 +128,32 @@ export default function EntryLogger({ user, projects }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault()
-    if (!text.trim() && !photoFile) return alert("Enter text or upload a photo")
+    if (!text.trim() && !photoFile && !audioFile) return alert("Enter text, upload a photo, or record / upload audio")
 
     setLoading(true)
     let photoPath = null
+    let audioPath = null
+
     if (photoFile) {
       photoPath = await uploadPhoto(photoFile)
     }
 
+    if (audioFile) {
+      audioPath = await uploadAudio(audioFile)
+    }
+
     const selectedProjectForInsert = projects.find((p) => String(getProjectKey(p)) === String(selectedProjectId))
     const projectIdForInsert = getProjectKey(selectedProjectForInsert) ?? selectedProjectId
+    const entryType = audioFile ? "voice" : photoFile ? "photo" : "text"
 
     const { error } = await supabase.from("entries").insert([
       {
         project_id: projectIdForInsert,
         user_id: user.id,
-        text,
+        text: text || null,
         photo_urls: photoPath,
-        type: "text",
+        audio_url: audioPath,
+        type: entryType,
       },
     ])
 
@@ -165,22 +163,42 @@ export default function EntryLogger({ user, projects }) {
       setText("")
       setPhotoFile(null)
       setPhotoPreview(null)
+      setAudioFile(null)
+      setAudioName("")
       fetchEntries(selectedProjectId)
     }
     setLoading(false)
   }
 
+  const uploadAudio = async (file) => {
+    const timestamp = Date.now()
+    const ext = file.name ? file.name.split(".").pop() : "webm"
+    const path = `${user.id}/${selectedProjectId}/voice-${timestamp}.${ext}`
+    const { error } = await supabase.storage.from("entry-audio").upload(path, file)
+    if (error) {
+      alert("Audio upload failed: " + error.message)
+      return null
+    }
+    return path
+  }
+
   const startRecording = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const recorder = new MediaRecorder(stream)
-      const audioChunks = []
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/ogg"
+      const recorder = new MediaRecorder(stream, { mimeType })
+      audioChunksRef.current = []
 
-      recorder.ondataavailable = (e) => audioChunks.push(e.data)
-      recorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunks, { type: "audio/wav" })
-        // For now, we'll just add a voice entry placeholder
-        // Full voice upload can be added later
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) audioChunksRef.current.push(e.data)
+      }
+
+      recorder.onstop = () => {
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType })
+        const ext = recorder.mimeType.includes("ogg") ? "ogg" : "webm"
+        const file = new File([blob], `recording.${ext}`, { type: recorder.mimeType })
+        setAudioFile(file)
+        setAudioName(`Recording — ${new Date().toLocaleTimeString()}`)
         setIsRecording(false)
       }
 
@@ -196,7 +214,14 @@ export default function EntryLogger({ user, projects }) {
     if (mediaRecorder) {
       mediaRecorder.stop()
       mediaRecorder.stream.getTracks().forEach((track) => track.stop())
-      setIsRecording(false)
+    }
+  }
+
+  const handleAudioFileChange = (e) => {
+    const file = e.target.files[0]
+    if (file) {
+      setAudioFile(file)
+      setAudioName(file.name)
     }
   }
 
@@ -258,8 +283,13 @@ export default function EntryLogger({ user, projects }) {
                   cursor: "pointer",
                 }}
               >
-                {isRecording ? "🔴 Stop Recording" : "🎤 Voice"}
+                {isRecording ? "🔴 Stop Recording" : "🎤 Record Voice"}
               </button>
+
+              <label style={{ cursor: "pointer", padding: "8px 16px", backgroundColor: "#6c757d", color: "white", borderRadius: "4px" }}>
+                🔊 Upload Audio
+                <input type="file" accept="audio/*" onChange={handleAudioFileChange} style={{ display: "none" }} />
+              </label>
 
               <button
                 type="submit"
@@ -293,13 +323,27 @@ export default function EntryLogger({ user, projects }) {
                 </button>
               </div>
             )}
+
+            {audioFile && (
+              <div style={{ marginBottom: "10px", display: "flex", alignItems: "center", gap: "10px", backgroundColor: "#f0fff0", padding: "8px 12px", borderRadius: "6px", border: "1px solid #c3e6c3" }}>
+                <span style={{ fontSize: "20px" }}>🎤</span>
+                <span style={{ fontSize: "13px", flex: 1 }}>{audioName}</span>
+                <audio controls src={URL.createObjectURL(audioFile)} style={{ height: "32px" }} />
+                <button
+                  type="button"
+                  onClick={() => { setAudioFile(null); setAudioName("") }}
+                  style={{ padding: "2px 8px", fontSize: "12px" }}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
           </form>
         </div>
       )}
 
       <h3>Entry History</h3>
       {fetchError && <p style={{ color: "#b00020" }}>Failed to load entries: {fetchError}</p>}
-      {!fetchError && <p style={{ color: "#666", fontSize: "12px" }}>{debugSummary}</p>}
       <EntryList entries={entries} loading={loading} />
     </div>
   )
