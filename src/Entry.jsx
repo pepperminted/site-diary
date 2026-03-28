@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from "react"
 import { supabase } from "./supabaseClient"
 
-export default function Entry({ entry, onDeleteEntry, deleting = false }) {
+export default function Entry({ entry, anchorId, highlighted = false, onDeleteEntry, deleting = false }) {
   const [photoUrl, setPhotoUrl] = useState(null)
   const [audioUrl, setAudioUrl] = useState(null)
   const [lightboxOpen, setLightboxOpen] = useState(false)
@@ -52,18 +52,25 @@ export default function Entry({ entry, onDeleteEntry, deleting = false }) {
   return (
     <>
       <div
+        id={anchorId}
         style={{
-          border: "1px solid #eee",
+          border: highlighted ? "1px solid #f59e0b" : "1px solid #eee",
           padding: "15px",
           marginBottom: "10px",
           borderRadius: "6px",
-          backgroundColor: "#f9f9f9",
+          backgroundColor: highlighted ? "#fff7db" : "#f9f9f9",
+          scrollMarginTop: "20px",
+          boxShadow: highlighted ? "0 0 0 3px rgba(245, 158, 11, 0.22)" : "none",
+          transition: "background-color 220ms ease, border-color 220ms ease, box-shadow 220ms ease",
         }}
       >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: "10px" }}>
           {/* Left: text + audio */}
           <div style={{ flex: 1 }}>
             <p style={{ margin: "0 0 5px 0", fontSize: "12px", color: "#999" }}>{createdAt}</p>
+            <p style={{ margin: "0 0 8px 0", fontSize: "12px", color: "#4b5563", fontFamily: "monospace" }}>
+              Entry ID: {entry.id}
+            </p>
             <span
               style={{
                 display: "inline-block",

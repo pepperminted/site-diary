@@ -9,6 +9,7 @@ import EntryLogger from "./EntryLogger"
 
 export default function App() {
   const [session, setSession] = useState(null)
+  const [authReady, setAuthReady] = useState(false)
   const [projects, setProjects] = useState([])
   const [currentView, setCurrentView] = useState("dashboard") // "dashboard", "entry-logger"
   const [selectedProjectForLog, setSelectedProjectForLog] = useState(null)
@@ -79,15 +80,45 @@ export default function App() {
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    let isMounted = true
+
+    const loadSession = async () => {
+      const { data, error } = await supabase.auth.getSession()
+
+      if (!isMounted) return
+
+      if (error) {
+        console.warn("Failed to restore Supabase session:", error.message)
+        await supabase.auth.signOut({ scope: "local" })
+        if (!isMounted) return
+        setSession(null)
+        setAuthReady(true)
+        return
+      }
+
       setSession(data.session)
-    })
+      setAuthReady(true)
+    }
+
+    loadSession()
 
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, session) => setSession(session)
+      (event, nextSession) => {
+        if (!isMounted) return
+
+        if (event === "SIGNED_OUT") {
+          setProjects([])
+        }
+
+        setSession(nextSession)
+        setAuthReady(true)
+      }
     )
 
-    return () => listener.subscription.unsubscribe()
+    return () => {
+      isMounted = false
+      listener.subscription.unsubscribe()
+    }
   }, [])
 
   const fetchProjects = async () => {
@@ -102,6 +133,8 @@ export default function App() {
   useEffect(() => {
     if (session) fetchProjects()
   }, [session])
+
+  if (!authReady) return null
 
   if (!session) return <Auth setSession={setSession} />
 
@@ -119,6 +152,22 @@ export default function App() {
     if (!project) return
 
     setDeletingProject(true)
+
+    const projectChatKey = getProjectKey(project)
+
+    if (projectChatKey && session?.user?.id) {
+      const { error: deleteChatError } = await supabase
+        .from("project_chat_messages")
+        .delete()
+        .eq("project_id", String(projectChatKey))
+        .eq("user_id", session.user.id)
+
+      if (deleteChatError) {
+        alert("Failed to delete project Q&A history: " + deleteChatError.message)
+        setDeletingProject(false)
+        return
+      }
+    }
 
     if (deleteLogsToo) {
       const { data: allEntries, error: entriesError } = await supabase
