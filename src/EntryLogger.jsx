@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useRef } from "react"
+import React, { useState, useEffect } from "react"
 import { supabase } from "./supabaseClient"
 import EntryList from "./EntryList"
 
@@ -43,25 +43,6 @@ export default function EntryLogger({ user, projects, initialProjectId, refreshP
 
   const getEntryAnchorId = (entryId) => `entry-${String(entryId ?? "").replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
-  const getAssistantMessageDisplay = (message) => {
-    if (message.role !== "assistant") {
-      return {
-        body: message.content,
-        citedEntryIds: [],
-      }
-    }
-
-    const citationMatch = message.content.match(/(?:^|\n)Cited entry ids:\s*(.+)$/i)
-    const body = citationMatch
-      ? message.content.replace(/\n?Cited entry ids:\s*.+$/i, "").trim()
-      : message.content
-
-    return {
-      body,
-      citedEntryIds: Array.isArray(message.citedEntryIds) ? message.citedEntryIds : [],
-    }
-  }
-
   const [selectedProjectId, setSelectedProjectId] = useState(null)
   const [text, setText] = useState("")
   const [entries, setEntries] = useState([])
@@ -81,13 +62,7 @@ export default function EntryLogger({ user, projects, initialProjectId, refreshP
   const [projectContactInput, setProjectContactInput] = useState("")
   const [projectPhaseInput, setProjectPhaseInput] = useState("")
   const [projectAddressInput, setProjectAddressInput] = useState("")
-  const [chatQuestion, setChatQuestion] = useState("")
-  const [chatMessages, setChatMessages] = useState([])
-  const [chatLoading, setChatLoading] = useState(false)
-  const [chatError, setChatError] = useState("")
-  const [chatHistoryLoading, setChatHistoryLoading] = useState(false)
-  const [highlightedEntryId, setHighlightedEntryId] = useState(null)
-  const highlightTimeoutRef = useRef(null)
+  const highlightedEntryId = null
 
   const selectedProject = projects.find((p) => String(getProjectKey(p)) === String(selectedProjectId))
 
@@ -112,60 +87,6 @@ export default function EntryLogger({ user, projects, initialProjectId, refreshP
       setSelectedProjectId(String(initialProjectId))
     }
   }, [initialProjectId, projects])
-
-  useEffect(() => {
-    setChatQuestion("")
-    setChatMessages([])
-    setChatError("")
-    setHighlightedEntryId(null)
-  }, [selectedProjectId])
-
-  useEffect(() => {
-    return () => {
-      if (highlightTimeoutRef.current) {
-        window.clearTimeout(highlightTimeoutRef.current)
-      }
-    }
-  }, [])
-
-  useEffect(() => {
-    if (!selectedProjectId || !user?.id) {
-      setChatMessages([])
-      setChatHistoryLoading(false)
-      return
-    }
-
-    const loadChatHistory = async () => {
-      setChatHistoryLoading(true)
-      setChatError("")
-
-      const { data, error } = await supabase
-        .from("project_chat_messages")
-        .select("id, role, content, cited_entry_ids, created_at")
-        .eq("project_id", String(selectedProjectId))
-        .eq("user_id", user.id)
-        .order("created_at", { ascending: true })
-
-      if (error) {
-        console.error("Failed to load chat history:", error.message)
-        setChatError(error.message)
-        setChatMessages([])
-      } else {
-        setChatMessages(
-          (data || []).map((message) => ({
-            id: message.id,
-            role: message.role,
-            content: message.content,
-            citedEntryIds: Array.isArray(message.cited_entry_ids) ? message.cited_entry_ids : [],
-          }))
-        )
-      }
-
-      setChatHistoryLoading(false)
-    }
-
-    loadChatHistory()
-  }, [selectedProjectId, user?.id])
 
   // Ensure we always have a valid selected project after projects load.
   useEffect(() => {
@@ -217,9 +138,20 @@ export default function EntryLogger({ user, projects, initialProjectId, refreshP
     } else {
       const selectedProjectForFilter = projects.find((p) => String(getProjectKey(p)) === String(projectId))
       const allEntries = data || []
-      const filteredEntries = selectedProjectForFilter
-        ? allEntries.filter((entry) => entryBelongsToProject(entry, selectedProjectForFilter))
-        : []
+      const selectedIdentifiers = uniqueNonEmpty([
+        projectId,
+        selectedProjectForFilter?.id,
+        selectedProjectForFilter?.project_id,
+        selectedProjectForFilter?.projectId,
+        selectedProjectForFilter?.uuid,
+        selectedProjectForFilter?.name,
+      ])
+
+      const filteredEntries = allEntries.filter((entry) => {
+        const entryIdentifiers = getEntryIdentifiers(entry)
+        return entryIdentifiers.some((identifier) => selectedIdentifiers.includes(identifier))
+      })
+
       setEntries(filteredEntries)
     }
     setLoading(false)
@@ -458,116 +390,6 @@ export default function EntryLogger({ user, projects, initialProjectId, refreshP
     setDeletingEntryId(null)
   }
 
-  const askProjectQuestion = async (e) => {
-    e.preventDefault()
-
-    const trimmedQuestion = chatQuestion.trim()
-    if (!trimmedQuestion) {
-      alert("Enter a question about this project.")
-      return
-    }
-
-    if (!selectedProject) {
-      alert("Select a project first.")
-      return
-    }
-
-    if (entries.length === 0) {
-      setChatError("This project has no diary entries yet.")
-      return
-    }
-
-    setChatLoading(true)
-    setChatError("")
-
-    try {
-      const response = await fetch("/api/project-chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          projectName: selectedProject.name || "",
-          question: trimmedQuestion,
-          entries,
-        }),
-      })
-
-      const payload = await response.json()
-
-      if (!response.ok) {
-        throw new Error(payload?.error || "Failed to query Claude.")
-      }
-
-      const assistantContent = payload.answerBody || payload.answer
-      const assistantCitations = Array.isArray(payload.citedEntryIds) ? payload.citedEntryIds : []
-
-      const { data: insertedMessages, error: saveError } = await supabase
-        .from("project_chat_messages")
-        .insert([
-          {
-            project_id: String(selectedProjectId),
-            user_id: user.id,
-            role: "user",
-            content: trimmedQuestion,
-            cited_entry_ids: [],
-          },
-          {
-            project_id: String(selectedProjectId),
-            user_id: user.id,
-            role: "assistant",
-            content: assistantContent,
-            cited_entry_ids: assistantCitations,
-          },
-        ])
-        .select("id, role, content, cited_entry_ids, created_at")
-        .order("created_at", { ascending: true })
-
-      if (saveError) {
-        throw new Error("Failed to save chat history: " + saveError.message)
-      }
-
-      setChatMessages((currentMessages) => ([
-        ...currentMessages,
-        ...((insertedMessages || []).map((message) => ({
-          id: message.id,
-          role: message.role,
-          content: message.content,
-          citedEntryIds: Array.isArray(message.cited_entry_ids) ? message.cited_entry_ids : [],
-        }))),
-      ]))
-      setChatQuestion("")
-    } catch (error) {
-      setChatError(error.message || "Failed to query Claude.")
-    } finally {
-      setChatLoading(false)
-    }
-  }
-
-  const handleCitationClick = (entryId, e) => {
-    e.preventDefault()
-
-    const normalizedEntryId = String(entryId ?? "")
-    if (!normalizedEntryId) return
-
-    const targetAnchorId = getEntryAnchorId(normalizedEntryId)
-    const targetElement = document.getElementById(targetAnchorId)
-
-    if (!targetElement) return
-
-    if (highlightTimeoutRef.current) {
-      window.clearTimeout(highlightTimeoutRef.current)
-    }
-
-    setHighlightedEntryId(normalizedEntryId)
-    targetElement.scrollIntoView({ behavior: "smooth", block: "center" })
-
-    highlightTimeoutRef.current = window.setTimeout(() => {
-      setHighlightedEntryId((currentValue) => (currentValue === normalizedEntryId ? null : currentValue))
-      highlightTimeoutRef.current = null
-    }, 2200)
-  }
-
   return (
     <div style={{ padding: "20px" }}>
       <h2>Project Log</h2>
@@ -590,126 +412,6 @@ export default function EntryLogger({ user, projects, initialProjectId, refreshP
 
       {selectedProject && (
         <div style={{ marginBottom: "30px", border: "1px solid #ddd", padding: "15px", borderRadius: "8px" }}>
-          <div style={{ marginBottom: "24px", border: "1px solid #dbe7f3", backgroundColor: "#f7fbff", borderRadius: "8px", padding: "16px" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", flexWrap: "wrap", marginBottom: "12px" }}>
-              <div>
-                <h3 style={{ margin: 0 }}>Project AI Q&A</h3>
-                <p style={{ margin: "6px 0 0", fontSize: "13px", color: "#4b5563" }}>
-                  Ask about dates, quantities, deliveries, inspections, issues, or other logged site activity.
-                </p>
-              </div>
-              <span style={{ fontSize: "12px", color: "#4b5563", backgroundColor: "white", border: "1px solid #dbe7f3", borderRadius: "999px", padding: "6px 10px" }}>
-                {entries.length} {entries.length === 1 ? "entry" : "entries"} in context
-              </span>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "14px" }}>
-              {chatHistoryLoading && (
-                <div style={{ padding: "12px", borderRadius: "8px", backgroundColor: "white", border: "1px dashed #c9d8e6", color: "#4b5563", fontSize: "14px" }}>
-                  Loading saved Q&amp;A history...
-                </div>
-              )}
-
-              {!chatHistoryLoading && chatMessages.length === 0 && (
-                <div style={{ padding: "12px", borderRadius: "8px", backgroundColor: "white", border: "1px dashed #c9d8e6", color: "#4b5563", fontSize: "14px" }}>
-                  No questions asked yet.
-                </div>
-              )}
-
-              {chatMessages.map((message) => {
-                const displayMessage = getAssistantMessageDisplay(message)
-
-                return (
-                  <div
-                    key={message.id}
-                    style={{
-                      alignSelf: message.role === "user" ? "flex-end" : "flex-start",
-                      maxWidth: "90%",
-                      padding: "12px 14px",
-                      borderRadius: "12px",
-                      backgroundColor: message.role === "user" ? "#0d6efd" : "white",
-                      color: message.role === "user" ? "white" : "#1f2937",
-                      border: message.role === "user" ? "none" : "1px solid #dbe7f3",
-                      boxShadow: message.role === "user" ? "none" : "0 4px 12px rgba(15, 23, 42, 0.05)",
-                      whiteSpace: "pre-wrap",
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    <div>{displayMessage.body}</div>
-                    {message.role === "assistant" && displayMessage.citedEntryIds.length > 0 && (
-                      <div style={{ marginTop: "10px", display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
-                        <span style={{ fontSize: "12px", color: "#4b5563" }}>Cited entries:</span>
-                        {displayMessage.citedEntryIds.map((entryId) => (
-                          <a
-                            key={`${message.id}-${entryId}`}
-                            href={`#${getEntryAnchorId(entryId)}`}
-                            onClick={(e) => handleCitationClick(entryId, e)}
-                            style={{
-                              fontSize: "12px",
-                              fontFamily: "monospace",
-                              textDecoration: "none",
-                              color: "#0d6efd",
-                              backgroundColor: "#eff6ff",
-                              border: "1px solid #bfdbfe",
-                              borderRadius: "999px",
-                              padding: "4px 8px",
-                            }}
-                          >
-                            {entryId}
-                          </a>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )
-              })}
-
-              {chatLoading && (
-                <div style={{ alignSelf: "flex-start", padding: "12px 14px", borderRadius: "12px", backgroundColor: "white", border: "1px solid #dbe7f3", color: "#4b5563" }}>
-                  Claude is reviewing the project diary...
-                </div>
-              )}
-            </div>
-
-            {chatError && <p style={{ marginTop: 0, marginBottom: "12px", color: "#b00020" }}>{chatError}</p>}
-
-            <form onSubmit={askProjectQuestion}>
-              <div style={{ display: "flex", gap: "10px", alignItems: "stretch", flexWrap: "wrap" }}>
-                <textarea
-                  placeholder="Ask a question about this project's diary entries"
-                  value={chatQuestion}
-                  onChange={(e) => setChatQuestion(e.target.value)}
-                  style={{
-                    flex: 1,
-                    minWidth: "260px",
-                    minHeight: "90px",
-                    padding: "10px",
-                    fontSize: "15px",
-                    borderRadius: "8px",
-                    border: "1px solid #bfd3e6",
-                    backgroundColor: "white",
-                  }}
-                />
-                <button
-                  type="submit"
-                  disabled={chatLoading || chatHistoryLoading || loading}
-                  style={{
-                    padding: "10px 18px",
-                    minWidth: "120px",
-                    backgroundColor: "#0d6efd",
-                    color: "white",
-                    borderRadius: "8px",
-                    border: "none",
-                    cursor: chatLoading || chatHistoryLoading || loading ? "not-allowed" : "pointer",
-                    fontWeight: "bold",
-                    opacity: chatLoading || chatHistoryLoading || loading ? 0.7 : 1,
-                  }}
-                >
-                  {chatLoading ? "Asking..." : "Ask Claude"}
-                </button>
-              </div>
-            </form>
-          </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", flexWrap: "wrap" }}>
             <h3 style={{ margin: 0 }}>Project Details</h3>

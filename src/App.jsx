@@ -6,6 +6,7 @@ import Auth from "./Auth"
 import ProjectForm from "./ProjectForm"
 import ProjectList from "./ProjectList"
 import EntryLogger from "./EntryLogger"
+import ProjectQA from "./ProjectQA"
 
 export default function App() {
   const [session, setSession] = useState(null)
@@ -283,6 +284,7 @@ export default function App() {
       {currentView === "dashboard" && (
         <div>
           <ProjectForm user={session.user} refreshProjects={fetchProjects} />
+          <ProjectQA user={session.user} projects={projects} onOpenProjectLog={handleOpenProjectLog} />
           <ProjectList
             projects={projects}
             onOpenProjectLog={handleOpenProjectLog}

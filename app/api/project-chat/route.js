@@ -1,4 +1,4 @@
-const PROJECT_ASSISTANT_SYSTEM_PROMPT = "you are construction project assistant. Answer questions about this project using ONLY the diary entries provided. If data isn't in the entries, state so clearly. Be very pricise with numbers and dates. At the end of each message always add a final line in exactly this format: Cited entry ids: id1, id2"
+const PROJECT_ASSISTANT_SYSTEM_PROMPT = "You are a construction project assistant. Depending on user scope, answer from either one selected project or across all selected projects in the prompt. Use only diary entries provided. Never invent missing facts. If information is unavailable, say so clearly. Be precise with dates, numbers, units, and sequence of events. At the end of each response always add a final line in exactly this format: Cited entry ids: id1, id2"
 const DEFAULT_CLAUDE_MODELS = [
   "claude-3-5-haiku-latest",
   "claude-3-5-sonnet-latest",
@@ -34,10 +34,12 @@ function formatEntryForPrompt(entry, index) {
   const createdAt = entry?.created_at ? new Date(entry.created_at).toISOString() : "unknown"
   const parsedData = entry?.ai_parsed ? JSON.stringify(entry.ai_parsed) : "null"
   const text = typeof entry?.text === "string" && entry.text.trim() ? entry.text.trim() : "(no text)"
+  const projectName = entry?.project_name_context || entry?.project_name || "Unknown Project"
 
   return [
     `Entry ${index + 1}`,
     `id: ${entryId}`,
+    `project: ${projectName}`,
     `created_at: ${createdAt}`,
     `entry_type: ${entry?.type || "unknown"}`,
     `text: ${text}`,
@@ -47,7 +49,7 @@ function formatEntryForPrompt(entry, index) {
   ].join("\n")
 }
 
-function buildUserPrompt(projectName, entries, question) {
+function buildUserPrompt(projectName, projectScope, entries, question) {
   const sortedEntries = [...entries].sort((left, right) => {
     const leftTime = left?.created_at ? new Date(left.created_at).getTime() : 0
     const rightTime = right?.created_at ? new Date(right.created_at).getTime() : 0
@@ -55,9 +57,17 @@ function buildUserPrompt(projectName, entries, question) {
   })
 
   const formattedEntries = sortedEntries.map((entry, index) => formatEntryForPrompt(entry, index)).join("\n\n---\n\n")
+  const allProjectsMode = projectScope === "all"
+  const selectedProjectsMode = projectScope === "selected"
 
   return [
-    `Project: ${projectName || "Unnamed Project"}`,
+    `Selected scope: ${allProjectsMode ? "All Projects" : selectedProjectsMode ? "Selected Projects" : "Single Project"}`,
+    `Selected project label: ${projectName || "Unnamed Project"}`,
+    allProjectsMode
+      ? "You may compare and summarize across projects when asked, but use only provided entries."
+      : selectedProjectsMode
+        ? "Compare and summarize only across the selected projects represented in these entries."
+        : "Use only entries from this selected project.",
     "Diary entries:",
     formattedEntries,
     "",
@@ -147,6 +157,7 @@ export async function POST(request) {
   }
 
   const projectName = typeof body?.projectName === "string" ? body.projectName.trim() : ""
+  const projectScope = ["all", "selected", "single"].includes(body?.projectScope) ? body.projectScope : "single"
   const question = typeof body?.question === "string" ? body.question.trim() : ""
   const entries = Array.isArray(body?.entries) ? body.entries : []
 
@@ -155,14 +166,24 @@ export async function POST(request) {
   }
 
   if (entries.length === 0) {
-    return Response.json({ error: "This project has no diary entries yet." }, { status: 400 })
+    return Response.json(
+      {
+        error:
+          projectScope === "all"
+            ? "No diary entries found across selected projects."
+            : projectScope === "selected"
+              ? "No diary entries found for the selected project set."
+              : "This project has no diary entries yet.",
+      },
+      { status: 400 }
+    )
   }
 
   const claudeResult = await requestClaudeMessage({
     apiKey,
     system: PROJECT_ASSISTANT_SYSTEM_PROMPT,
     maxTokens: 800,
-    userContent: buildUserPrompt(projectName, entries, question),
+    userContent: buildUserPrompt(projectName, projectScope, entries, question),
   })
 
   if (claudeResult.error) {
